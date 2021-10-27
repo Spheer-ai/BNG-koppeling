@@ -110,4 +110,16 @@ r = requests.post(
     data=body,
     headers=headers,
     cert=("xs2a_sandbox_bngbank_client_tls.cer", "xs2a_sandbox_bngbank_client_tls.key")
+).json()
+
+print(
+    "".join([
+        "https://api.xs2a-sandbox.bngbank.nl/authorise?response_type=code&",
+        "client_id=PSDNL-AUT-SANDBOX&",
+        "state=state12345&",
+        "scope=" + 'AIS:' + r["consentId"] + "&",
+        "code_challenge=12345&",
+        "code_challenge_method=Plain&",
+        "redirect_uri=" + redirect_url,
+    ])
 )
