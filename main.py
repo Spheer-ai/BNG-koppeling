@@ -10,13 +10,7 @@ from Crypto.Hash import SHA256
 from Crypto.Signature import PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from urllib.parse import urlparse
-
-
-# The URL that the user is redirected to after giving permission.
-redirect_url = "https://nu.nl"
-consent_url = "https://api.xs2a-sandbox.bngbank.nl/api/v1/consents"
-request_id = str(uuid.uuid4())
-psu_ip_address = "212.178.101.162"
+from urllib.parse import urlencode
 
 
 def get_current_rfc_1123_date():
@@ -69,11 +63,11 @@ def get_certificate():
     return data
 
 
-def make_headers(method, url, request_id, body):
+def make_headers(method, url, request_id, body, content_type="application/json"):
     headers = {
         "request-target": url,
         "Accept": "application/json",
-        "Content-Type": "application/json",  # Always the case?
+        "Content-Type": content_type,  # Always the case?
         "Date": get_current_rfc_1123_date(),
         "Digest": get_digest(body),
         "X-Request-ID": request_id,
@@ -86,40 +80,80 @@ def make_headers(method, url, request_id, body):
     }
 
 
-body = {
-    "access": {
-        "accounts": None,
-        "balances": None,
-        "transactions": None,
-        "availableAccounts": None,
-        "availableAccountsWithBalances": None,
-        "allPsd2": "allAccounts"
-    },
-    "combinedServiceIndicator": False,
-    "recurringIndicator": True,
-    "validUntil": "2021-12-31",
-    "frequencyPerDay": 4
-}
+redirect_url = "https://nu.nl"
+psu_ip_address = "212.178.101.162"
 
-body = json.dumps(body).replace(" ", "")
 
-headers = make_headers("post", consent_url, request_id, body)
+def create_consent():
+    body = {
+        "access": {
+            "accounts": None,
+            "balances": None,
+            "transactions": None,
+            "availableAccounts": None,
+            "availableAccountsWithBalances": None,
+            "allPsd2": "allAccounts"
+        },
+        "combinedServiceIndicator": False,
+        "recurringIndicator": True,
+        "validUntil": "2021-12-31",
+        "frequencyPerDay": 4
+    }
+    body = json.dumps(body).replace(" ", "")
 
-r = requests.post(
-    consent_url,
-    data=body,
-    headers=headers,
-    cert=("xs2a_sandbox_bngbank_client_tls.cer", "xs2a_sandbox_bngbank_client_tls.key")
-).json()
+    # The URL that the user is redirected to after giving permission.
+    consent_url = "https://api.xs2a-sandbox.bngbank.nl/api/v1/consents"
+    request_id = str(uuid.uuid4())
 
-print(
-    "".join([
-        "https://api.xs2a-sandbox.bngbank.nl/authorise?response_type=code&",
-        "client_id=PSDNL-AUT-SANDBOX&",
-        "state=state12345&",
-        "scope=" + 'AIS:' + r["consentId"] + "&",
-        "code_challenge=12345&",
-        "code_challenge_method=Plain&",
-        "redirect_uri=" + redirect_url,
-    ])
-)
+    headers = make_headers("post", consent_url, request_id, body)
+
+    r = requests.post(
+        consent_url,
+        data=body,
+        headers=headers,
+        cert=("xs2a_sandbox_bngbank_client_tls.cer", "xs2a_sandbox_bngbank_client_tls.key")
+    ).json()
+
+    print(
+        "".join([
+            "https://api.xs2a-sandbox.bngbank.nl/authorise?response_type=code&",
+            "client_id=PSDNL-AUT-SANDBOX&",
+            "state=state12345&",
+            "scope=" + 'AIS:' + r["consentId"] + "&",
+            "code_challenge=12345&",
+            "code_challenge_method=Plain&",
+            "redirect_uri=" + redirect_url,
+        ])
+    )
+
+
+def retrieve_access_token():
+    access_code = input("Enter access code query string parameter from the previous step: ")
+
+    body = {
+        "client_id": "PSDNL-AUT-SANDBOX",
+        "grant_type": "authorization_code",
+        "code": access_code,
+        "code_verifier": "12345",  # What is this?
+        "state": "state12345",  # What is this?
+        "redirect_uri": redirect_url
+    }
+    body = urlencode(body, doseq=False)
+
+    token_url = "https://api.xs2a-sandbox.bngbank.nl/token"
+    request_id = str(uuid.uuid4())
+
+    headers = make_headers("post", token_url, request_id, body, content_type="application/x-www-form-urlencoded;charset=UTF-8")
+
+    r = requests.post(
+        token_url,
+        data=body,
+        headers=headers,
+        cert=("xs2a_sandbox_bngbank_client_tls.cer", "xs2a_sandbox_bngbank_client_tls.key")
+    )
+    print(r)
+
+
+if __name__ == "__main__":
+    create_consent()
+    retrieve_access_token()
