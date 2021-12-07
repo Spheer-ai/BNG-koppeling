@@ -36,7 +36,10 @@ def get_signature(method, headers):
     headers = {k: v for k, v in headers.items() if k in signature_header_names}
     headers = {"(request-target)" if k == "request-target" else k.lower(): v
                for k, v in headers.items()}
-    headers["(request-target)"] = method + " " + urlparse(headers["(request-target)"]).path
+    path = urlparse(headers["(request-target)"]).path
+    tail = headers["(request-target)"].split(path)[-1]
+    headers["(request-target)"] = method + " " + path + tail
+
     signing_string = "\n".join([k + ": " + v for k, v in headers.items()])
     signature_headers = " ".join(headers.keys())
 
@@ -63,8 +66,9 @@ def get_certificate():
     return data
 
 
-def make_headers(method, url, request_id, body, content_type="application/json"):
+def make_headers(method, url, request_id, body, content_type="application/json", extra_headers={}):
     headers = {
+        **extra_headers,
         "request-target": url,
         "Accept": "application/json",
         "Content-Type": content_type,  # Always the case?
@@ -102,13 +106,13 @@ def create_consent():
     body = json.dumps(body).replace(" ", "")
 
     # The URL that the user is redirected to after giving permission.
-    consent_url = "https://api.xs2a-sandbox.bngbank.nl/api/v1/consents"
+    url = "https://api.xs2a-sandbox.bngbank.nl/api/v1/consents"
     request_id = str(uuid.uuid4())
 
-    headers = make_headers("post", consent_url, request_id, body)
+    headers = make_headers("post", url, request_id, body)
 
     r = requests.post(
-        consent_url,
+        url,
         data=body,
         headers=headers,
         cert=("xs2a_sandbox_bngbank_client_tls.cer", "xs2a_sandbox_bngbank_client_tls.key")
@@ -125,6 +129,7 @@ def create_consent():
             "redirect_uri=" + redirect_url,
         ])
     )
+    return r["consentId"]
 
 
 def retrieve_access_token():
@@ -140,20 +145,83 @@ def retrieve_access_token():
     }
     body = urlencode(body, doseq=False)
 
-    token_url = "https://api.xs2a-sandbox.bngbank.nl/token"
+    url = "https://api.xs2a-sandbox.bngbank.nl/token"
     request_id = str(uuid.uuid4())
 
-    headers = make_headers("post", token_url, request_id, body, content_type="application/x-www-form-urlencoded;charset=UTF-8")
+    headers = make_headers("post", url, request_id, body, content_type="application/x-www-form-urlencoded;charset=UTF-8")
 
     r = requests.post(
-        token_url,
+        url,
         data=body,
         headers=headers,
         cert=("xs2a_sandbox_bngbank_client_tls.cer", "xs2a_sandbox_bngbank_client_tls.key")
     )
-    print(r)
+    return r.json()["access_token"]
+
+
+def retrieve_consent_details(consent_id, access_token):
+    url = f"https://api.xs2a-sandbox.bngbank.nl/api/v1/consents/{consent_id}"
+    request_id = str(uuid.uuid4())
+
+    headers = make_headers("get", url, request_id, "", extra_headers={
+        "Authorization": f"Bearer {access_token}"
+    })
+
+    r = requests.get(
+        url,
+        data="",
+        headers=headers,
+        cert=("xs2a_sandbox_bngbank_client_tls.cer", "xs2a_sandbox_bngbank_client_tls.key")
+    )
+    return r.json()
+
+
+def read_available_accounts(consent_id, access_token):
+    url = "https://api.xs2a-sandbox.bngbank.nl/api/v1/accounts?withBalance=true"
+    request_id = str(uuid.uuid4())
+
+    headers = make_headers("get", url, request_id, "", extra_headers={
+        "Authorization": f"Bearer {access_token}",
+        "Consent-ID": consent_id
+    })
+
+    r = requests.get(
+        url,
+        data="",
+        headers=headers,
+        cert=("xs2a_sandbox_bngbank_client_tls.cer", "xs2a_sandbox_bngbank_client_tls.key")
+    )
+    return r.json()
+
+
+def read_transaction_list(consent_id, access_token, account_id):
+    booking_status = "both"  # booked, pending or both
+    date_from = "2018-01-01"
+    with_balance = "false"
+
+    url = f"https://api.xs2a-sandbox.bngbank.nl/api/v1/accounts/{account_id}/transactions?bookingStatus={booking_status}&dateFrom={date_from}&withBalance={with_balance}"
+    request_id = str(uuid.uuid4())
+
+    headers = make_headers("get", url, request_id, "", extra_headers={
+        "Authorization": f"Bearer {access_token}",
+        "Consent-ID": consent_id
+    })
+
+    r = requests.get(
+        url,
+        data="",
+        headers=headers,
+        cert=("xs2a_sandbox_bngbank_client_tls.cer", "xs2a_sandbox_bngbank_client_tls.key")
+    )
+    return r.json()
 
 
 if __name__ == "__main__":
-    create_consent()
-    retrieve_access_token()
+    consent_id = create_consent()
+    access_token = retrieve_access_token()
+    # consent_id = 'c63ee815-e405-4040-8b13-74a9b34ea668'
+    # access_token = 'eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL3d3dy5ibmdiYW5rLm5sIiwic3ViIjoidGVzdHVzZXIwMSIsImF1ZCI6IlBTRE5MLUFVVC1TQU5EQk9YIiwiZXhwIjoxNjQwOTA1MjAwLCJuYmYiOjE2Mzg4MDg0ODcsImlhdCI6MTYzODgwODQ4NywianRpIjoiZWM1NDM1MGQtY2QyOS00YWY4LThhZTYtMzJhNzJmNWVjMmZiIiwiaHR0cDovL3NjaGVtYXMubWljcm9zb2Z0LmNvbS93cy8yMDA4LzA2L2lkZW50aXR5L2NsYWltcy91c2VyZGF0YSI6ImM2M2VlODE1LWU0MDUtNDA0MC04YjEzLTc0YTliMzRlYTY2OCJ9.fhuqiC3on4PYZsqtNPnJ8XENNKtsvn8lE7JNdb65uXyCJwTqUZlI5niwkvCsAAb5Izq6ERms0bN77Mkr9fUgyQ'
+    consent_details = retrieve_consent_details(consent_id, access_token)
+    available_accounts = read_available_accounts(consent_id, access_token)
+    account_id = available_accounts["accounts"][0]["resourceId"]
+    transactions = read_transaction_list(consent_id, access_token, account_id)
