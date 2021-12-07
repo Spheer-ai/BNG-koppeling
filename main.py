@@ -22,6 +22,14 @@ REQUEST_CERTS = (
 URL_PREFIX = "https://api.xs2a-sandbox.bngbank.nl/api/v1/"
 
 
+def validate_iban(iban):
+    if (iban.startswith("NL") and iban[4:7] == "BNG" and
+            all([(x.isdigit()) for x in iban[8:]])):
+        return
+    else:
+        raise ValueError(f"{iban} is not a valid IBAN.")
+
+
 def get_current_rfc_1123_date():
     now = datetime.now()
     stamp = mktime(now.timetuple())
@@ -97,7 +105,8 @@ def make_headers(
     }
 
 
-def create_consent(iban):
+def create_consent(iban, valid_until):
+    validate_iban(iban)
     body = {
         "access": {
             "accounts": [{"iban": iban, "currency": "EUR"}],
@@ -105,11 +114,11 @@ def create_consent(iban):
             "transactions": [{"iban": iban, "currency": "EUR"}],
             "availableAccounts": None,
             "availableAccountsWithBalances": None,
-            "allPsd2": None,  #  "allAccounts"
+            "allPsd2": None,
         },
         "combinedServiceIndicator": False,
         "recurringIndicator": True,
-        "validUntil": "2021-12-31",
+        "validUntil": valid_until,
         "frequencyPerDay": 4,
     }
     body = json.dumps(body)
@@ -190,10 +199,9 @@ def read_available_accounts(consent_id, access_token):
     return r.json()
 
 
-def read_transaction_list(consent_id, access_token, account_id):
+def read_transaction_list(consent_id, access_token, account_id, date_from):
     booking_status = "both"  # booked, pending or both
-    date_from = "2018-01-01"
-    with_balance = "false"
+    with_balance = "true"
 
     url = (f"{URL_PREFIX}accounts/{account_id}/"
            f"transactions?bookingStatus={booking_status}&dateFrom={date_from}&"
@@ -211,19 +219,26 @@ def read_transaction_list(consent_id, access_token, account_id):
     return r.json()
 
 
-def read_account_information():
-    pass
-
-
 def read_account_information(consent_id, access_token):
     url = f"{URL_PREFIX}accounts"
     request_id = str(uuid.uuid4())
 
-    headers = make_headers(
-        "get",
-        url,
-        request_id,
-        "",
+    headers = make_headers("get", url, request_id, "",
+        extra_headers={
+            "Authorization": f"Bearer {access_token}",
+            "Consent-ID": consent_id,
+        },
+    )
+
+    r = requests.get(url, data="", headers=headers, cert=REQUEST_CERTS)
+    return r.json()
+
+
+def read_transaction_details(consent_id, access_token, account_id, transaction_id):
+    url = f"{URL_PREFIX}accounts/{account_id}/transactions/{transaction_id}"
+    request_id = str(uuid.uuid4())
+
+    headers = make_headers("get", url, request_id, "",
         extra_headers={
             "Authorization": f"Bearer {access_token}",
             "Consent-ID": consent_id,
@@ -235,11 +250,17 @@ def read_account_information(consent_id, access_token):
 
 
 if __name__ == "__main__":
-    consent_id = create_consent("NL34BNGT5532530633")
+    consent_id = create_consent(
+        iban="NL34BNGT5532530633",
+        valid_until="2021-12-31"
+    )
     access_token = retrieve_access_token()
     consent_details = retrieve_consent_details(consent_id, access_token)
     account_information = read_account_information(consent_id, access_token)
     # Because we will always link one account per municipality... Right?
     assert len(account_information["accounts"]) == 1
     account_id = account_information["accounts"][0]["resourceId"]
-    transactions = read_transaction_list(consent_id, access_token, account_id)
+    transactions = read_transaction_list(consent_id, access_token, account_id, date_from="2018-01-01")
+    transaction_id = transactions["transactions"]["booked"][0]["transactionId"]
+    # Does not seem to contain more info than what is already returned by read_transaction_list.
+    transaction_details = read_transaction_details(consent_id, access_token, account_id, transaction_id)
