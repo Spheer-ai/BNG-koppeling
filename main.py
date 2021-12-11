@@ -11,7 +11,8 @@ from Crypto.Signature import PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from urllib.parse import urlparse
 from urllib.parse import urlencode
-
+from cryptography import x509
+from cryptography.hazmat.backends import default_backend
 
 REDIRECT_URL = "https://nu.nl"
 PSU_IP_ADDRESS = "212.178.101.162"
@@ -20,6 +21,21 @@ REQUEST_CERTS = (
     "xs2a_sandbox_bngbank_client_tls.key",
 )
 URL_PREFIX = "https://api.xs2a-sandbox.bngbank.nl/api/v1/"
+
+
+def get_cert_data(cert):
+    with open(cert, "rb") as f:
+        x = x509.load_pem_x509_certificate(f.read(), default_backend())
+    # Why does this not start with two zeros as in get_signature?
+    # See: 00E8B54055D929413F
+    serial_number = '%x' % x.serial_number
+    # Discrepancies:
+    # '2.5.4.97=PSDNL-AUT-SANDBOX'                     ---> 'OID.2.5.4.97=PSDNL-AUT-SANDBOX'?
+    # ST=South-Holland                                 ---> S=South-Holland
+    # '1.2.840.113549.1.9.1=klantenservice@bngbank.nl' ---> E=klantenservice@bngbank.nl
+    # 'CN=xs2a_sandbox_bngbank_client_signing'         ---> CA=CN=xs2a_sandbox_bngbank_client_signing
+    issuer = str(x.issuer).replace("<Name(", "").replace(")>", "").split(",")
+    return serial_number, issuer
 
 
 def validate_iban(iban):
@@ -155,8 +171,8 @@ def retrieve_access_token():
         "client_id": "PSDNL-AUT-SANDBOX",
         "grant_type": "authorization_code",
         "code": access_code,
-        "code_verifier": "12345",  # What is this?
-        "state": "state12345",  # What is this?
+        "code_verifier": "12345",  # TODO
+        "state": "state12345",  # TODO
         "redirect_uri": REDIRECT_URL,
     }
     body = urlencode(body, doseq=False)
@@ -250,6 +266,9 @@ def read_transaction_details(consent_id, access_token, account_id, transaction_i
 
 
 if __name__ == "__main__":
+    sandbox_signing = get_cert_data("xs2a_sandbox_bngbank_client_signing.cer")
+    own_signing = get_cert_data("test_public.cer")
+
     consent_id = create_consent(
         iban="NL34BNGT5532530633",
         valid_until="2021-12-31"
